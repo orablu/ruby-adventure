@@ -1,4 +1,10 @@
-# Events: ...
+class String
+    def proper
+        return self.split(' ').collect{|w| w.capitalize}.join(' ')
+    end
+end
+
+# Everything passed as an event will be created as a callable method in the class.
 class Thing
     attr_reader :name
     attr_reader :description
@@ -8,12 +14,19 @@ class Thing
         @name = 'A thing'
         @description = desc
         @value = value
-        events.each{ |symbol, action| instance_variable_set("@#{symbol.to_s}", action) }
+        #events.each{ |symbol, action| instance_variable_set("@#{symbol.to_s}", action) }
+        metaclass = (class << self; self; end)
+        events.each{|symbol, action| metaclass.send(:define_method, symbol, &action)}
+    end
+
+    def to_s
+        return "#{@name}\n--------------------\n#{@description}"
     end
 end
 
 # Event: Entity.dodged(attack)
 class Entity < Thing
+    HP_RATE_MOD = 0.03
     attr_reader :mhp
     attr_reader :hp
     attr_reader :status
@@ -21,13 +34,24 @@ class Entity < Thing
     attr_reader :attacks
     attr_reader :items
 
-    def initialize(name, hp, dodge = 0.1, attacks: {}, items: {}, &dodged)
-        super(name, events: {:dodged => dodged})
-        @mhp = @hp = hp
+    def initialize(name, level, starthp, hprate = 1.5, dodge = 0.1, description = nil, attacks: {}, items: {}, levelup: proc{|e|}, &dodged)
+        super(name, description, events: {:dodged => dodged, :levelup => levelup})
+        @level = level
+        @mhp = @hp = starthp
+        @hprate = hprate
         @status = []
         @dodge = dodge
         @attacks = attacks
         @items = items
+        level.times{levelup}
+    end
+
+    def levelup(attacks = nil)
+        @level = @level + 1
+        rate = @hprate + @level / HP_RATE_MOD
+        hp = (rand * rate).floor
+        @mhp = @hp = @mhp + hp
+        attacks.each{ |attack| @attacks << attack } if attacks
     end
 
     def attack(entity, attack = nil)
@@ -43,12 +67,12 @@ class Entity < Thing
             attack.apply_effects self
             return @hp < 0
         end
-        @dodged.call attack
+        dodged attack
         return false
     end
 
-    def cure(effect_type)
-        @status.each{|status| @status.delete(status) if status.type == effect_type}
+    def cure(item)
+        @status.each{|status| @status.delete(status) if status.cure == item}
     end
 
     def heal(amount)
@@ -62,44 +86,10 @@ class Entity < Thing
             @attacks.each{|a| a.recover amount}
         end
     end
-end
 
-# Event: Attack.used(by), Attack.no_pp(self)
-class Attack < Thing
-    attr_reader :type
-    attr_reader :power
-    attr_reader :effects
-    attr_reader :mpp
-    attr_reader :pp
-
-    def initialize(name, description, type, power, pp = nil, effects = [], no_pp = proc{|a|}, &used)
-        super(name, description, events: {:used => used, :no_pp => no_pp})
-        @type = type
-        @power = power
-        @effects = effects
-        @mpp = @pp = pp
-    end
-
-    def use(entity)
-        if pp then
-            if pp < 1 then
-                @no_pp.call self
-                return false
-            end
-            pp = pp - 1
-        end
-        @used.call entity
-        return true
-    end
-
-    def apply_effects(entity)
-        affected = false
-        @effects.each{ |e| affected = affected or e.apply_effect entity }
-        return affected
-    end
-
-    def recover(amount)
-        @pp = @pp + amount < @mpp ? @pp + amount : @mpp
+    def to_s
+        str = "#{@name} (#{@hp}/#{@mhp} hp)\n--------------------\n#{@description}"
+        @attacks.each{|k, v| str << "\n #{v.to_s}"}
     end
 end
 
@@ -107,8 +97,8 @@ end
 class Item < Thing
     attr_reader :effects
 
-    def initialize(name, description, value, usechance = 1.0, &used)
-        super(name, description, value, events: {:used => used})
+    def initialize(name, description, value, usechance = 1.0, used_up: proc{}, &used)
+        super(name, description, value, events: {:use => used, :use_up => used_up})
         @isused = false
         @usechance = usechance
     end
@@ -119,11 +109,12 @@ class Item < Thing
 
     def use(entity)
         if @for
-            @used.call entity @for
+            use entity @for
         else
-            @used.call entity
+            use entity
         end
         @isused = rand < @usechance
+        use_up if @isused
         return @isused
     end
 end
@@ -148,10 +139,50 @@ class Effect < Thing
             effect = entity.get_effect @type
             entity.status.delete if effect and @damage > effect.damage
             entity.status << self unless effect and @damage < effect.damage
-            @applied.call entity
+            applied entity
             return true
         end
         return false
+    end
+end
+
+# Event: Attack.used(by), Attack.no_pp(self)
+class Attack < Thing
+    attr_reader :type
+    attr_reader :power
+    attr_reader :effects
+    attr_reader :mpp
+    attr_reader :pp
+
+    def initialize(name, description, type, power, pp = nil, canrecover = true, effects = [], no_pp = proc{|a|}, &used)
+        super(name, description, events: {:used => used, :no_pp => no_pp})
+        @type = type
+        @power = power
+        @effects = effects
+        @mpp = @pp = pp
+        @canrecover = canrecover
+    end
+
+    def use(entity)
+        if pp then
+            if pp < 1 then
+                no_pp self
+                return false
+            end
+            pp = pp - 1
+        end
+        used entity
+        return true
+    end
+
+    def apply_effects(entity)
+        affected = false
+        @effects.each{ |e| affected = affected or e.apply_effect entity }
+        return affected
+    end
+
+    def recover(amount)
+        @pp = @pp + amount < @mpp ? @pp + amount : @mpp if @canrecover
     end
 end
 
@@ -163,8 +194,8 @@ class Room < Thing
     end
 
     def look
-        @looked.call self
-        @doors.each{ |door| @looked.call door }
+        looked self
+        @doors.each{ |door| looked door }
     end
 
     def open(direction)
@@ -188,7 +219,7 @@ class Door < Thing
     def open
         if not @open then
             @open = true
-            @opened.call
+            opened
             return @open
         end
         return false
