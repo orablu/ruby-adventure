@@ -10,6 +10,16 @@ class Herb < Item
     end
 end
 
+class Antidote < Item
+    def initialize
+        super("Antidote",
+              "A green vial. Cures minor poisons.",
+              50){ |e|
+                  puts e.cure(:antidote) ? "The poison leaves #{e.name}'s system." : "It had no effect on #{e.name}."
+              }
+    end
+end
+
 class Potion < Item
     def initialize(type = 'weak', strength = 5, cost = 20)
         super("#{type.proper} Potion",

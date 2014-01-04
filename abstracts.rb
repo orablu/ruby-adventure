@@ -6,6 +6,7 @@ end
 
 # Everything passed as an event will be created as a callable method in the class.
 class Thing
+    @@default_action = Proc.new{}
     attr_reader :name
     attr_reader :description
     attr_reader :value
@@ -14,9 +15,11 @@ class Thing
         @name = 'A thing'
         @description = desc
         @value = value
-        #events.each{ |symbol, action| instance_variable_set("@#{symbol.to_s}", action) }
         metaclass = (class << self; self; end)
-        events.each{|symbol, action| metaclass.send(:define_method, symbol, &action)}
+        events.each do |symbol, action|
+            next unless Thing.method_defined? symbol
+            metaclass.send(:define_method, symbol, &action)
+        end
     end
 
     def to_s
@@ -34,8 +37,9 @@ class Entity < Thing
     attr_reader :attacks
     attr_reader :items
 
-    def initialize(name, level, starthp, hprate = 1.5, dodge = 0.1, description = nil, attacks: {}, items: {}, levelup: proc{|e|}, &dodged)
-        super(name, description, events: {:dodged => dodged, :levelup => levelup})
+    def initialize(name, level, starthp, hprate = 1.5, dodge = 0.1, description = nil, attacks: {}, items: {}, &dodged)
+        dodged ||= @@default_action
+        super(name, description, events: {:dodged => dodged})
         @level = level
         @mhp = @hp = starthp
         @hprate = hprate
@@ -43,7 +47,7 @@ class Entity < Thing
         @dodge = dodge
         @attacks = attacks
         @items = items
-        level.times{levelup}
+        level.times{ levelup }
     end
 
     def levelup(attacks = nil)
@@ -55,10 +59,8 @@ class Entity < Thing
     end
 
     def attack(entity, attack = nil)
-        attack = (rand * @attacks.length).floor if not attack
-        if @attacks[attack].use
-            entity.hit_with @attacks[attack]
-        end
+        attack = (rand * @attacks.length).floor unless attack
+        entity.hit_with @attacks[attack] if @attacks[attack].use
     end
 
     def hit_with(attack)
@@ -97,7 +99,9 @@ end
 class Item < Thing
     attr_reader :effects
 
-    def initialize(name, description, value, usechance = 1.0, used_up: proc{}, &used)
+    def initialize(name, description, value, usechance = 1.0, used_up: nil, &used)
+        used ||= @@default_action
+        used_up ||= @@default_action
         super(name, description, value, events: {:use => used, :use_up => used_up})
         @isused = false
         @usechance = usechance
@@ -127,6 +131,7 @@ class Effect < Thing
     attr_reader :cure
 
     def initialize(name, description, type, cure, chance = 1.0, damage = 0, &applied)
+        applied ||= @@default_action
         super(name, description, events: {:applied => applied})
         @type = type
         @cure = cure
@@ -154,7 +159,9 @@ class Attack < Thing
     attr_reader :mpp
     attr_reader :pp
 
-    def initialize(name, description, type, power, pp = nil, canrecover = true, effects = [], no_pp = proc{|a|}, &used)
+    def initialize(name, description, type, power, pp = nil, canrecover = true, effects = [], no_pp: nil, &used)
+        no_pp ||= @@default_action
+        used ||= @@default_action
         super(name, description, events: {:used => used, :no_pp => no_pp})
         @type = type
         @power = power
@@ -177,7 +184,7 @@ class Attack < Thing
 
     def apply_effects(entity)
         affected = false
-        @effects.each{ |e| affected = affected or e.apply_effect entity }
+        @effects.each{ |e| affected ||= e.apply_effect entity }
         return affected
     end
 
@@ -189,6 +196,7 @@ end
 # Events: looked(self/room)
 class Room < Thing
     def initialize(name, description, doors = {}, &looked)
+        looked ||= @@default_action
         super(name, description, events: {:looked => looked})
         @doors = doors
     end
@@ -208,6 +216,7 @@ end
 # Events: opened
 class Door < Thing
     def initialize(name, description, to, open = true, &opened)
+        opened ||= @@default_action
         super(name, description, events: {:opened => opened})
         @open = open
     end
